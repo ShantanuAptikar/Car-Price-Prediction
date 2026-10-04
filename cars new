@@ -1,0 +1,132 @@
+import joblib
+import pandas as pd
+import streamlit as st
+
+
+st.set_page_config(
+	page_title="CarValue | Used car insights",
+	page_icon="🚘",
+	layout="wide",
+)
+
+
+DATA_FILE = "car_price_regression_data (1).csv"
+MODEL_FILE = "cars_model.pkl"
+
+
+@st.cache_data
+def load_data():
+	return pd.read_csv(DATA_FILE)
+
+
+@st.cache_resource
+def load_model():
+	return joblib.load(MODEL_FILE)
+
+
+cars = load_data()
+model = load_model()
+
+st.markdown(
+	"""
+	<style>
+	.stApp { background: #f6f4ef; color: #17211b; }
+	[data-testid="stHeader"] { background: transparent; }
+	.hero { background: #173f35; color: #f8f3e8; padding: 2.2rem 2.5rem; border-radius: 18px; margin-bottom: 1.5rem; }
+	.hero h1 { font-family: Georgia, serif; font-size: 3rem; margin: 0; letter-spacing: 0; }
+	.hero p { color: #c9d9c6; font-size: 1.05rem; margin: .5rem 0 0; }
+	[data-testid="stMetric"] { background: #fffdf8; border: 1px solid #e5e0d5; padding: 1rem; border-radius: 12px; }
+	h2, h3 { font-family: Georgia, serif; letter-spacing: 0; }
+	</style>
+	<div class="hero">
+		<h1>CarValue</h1>
+		<p>Explore the market, understand the signals, and estimate a used car's value.</p>
+	</div>
+	""",
+	unsafe_allow_html=True,
+)
+
+average_price = cars["Price_Lakh"].mean()
+most_common_brand = cars["Brand"].mode().iat[0]
+latest_year = int(cars["Year"].max())
+
+metric_columns = st.columns(4)
+metric_columns[0].metric("Cars in dataset", f"{len(cars):,}")
+metric_columns[1].metric("Average price", f"₹{average_price:.2f} L")
+metric_columns[2].metric("Most listed brand", most_common_brand)
+metric_columns[3].metric("Latest model year", latest_year)
+
+st.subheader("Market overview")
+chart_left, chart_right = st.columns(2)
+with chart_left:
+	st.markdown("### Typical price by brand")
+	brand_prices = (
+		cars.groupby("Brand", as_index=True)["Price_Lakh"]
+		.mean()
+		.sort_values(ascending=False)
+	)
+	st.bar_chart(brand_prices, color="#d87941", y_label="Price (₹ lakh)")
+with chart_right:
+	st.markdown("### Price by model year")
+	year_prices = cars.groupby("Year", as_index=True)["Price_Lakh"].mean().sort_index()
+	st.line_chart(year_prices, color="#2f7762", y_label="Price (₹ lakh)")
+
+st.subheader("Find a car")
+filter_columns = st.columns(3)
+with filter_columns[0]:
+	selected_brand = st.selectbox("Brand", ["All brands"] + sorted(cars["Brand"].unique()))
+with filter_columns[1]:
+	selected_fuel = st.selectbox("Fuel type", ["All fuel types"] + sorted(cars["Fuel_Type"].unique()))
+with filter_columns[2]:
+	selected_transmission = st.selectbox(
+		"Transmission", ["All transmissions"] + sorted(cars["Transmission"].unique())
+	)
+
+filtered_cars = cars.copy()
+if selected_brand != "All brands":
+	filtered_cars = filtered_cars[filtered_cars["Brand"] == selected_brand]
+if selected_fuel != "All fuel types":
+	filtered_cars = filtered_cars[filtered_cars["Fuel_Type"] == selected_fuel]
+if selected_transmission != "All transmissions":
+	filtered_cars = filtered_cars[filtered_cars["Transmission"] == selected_transmission]
+
+st.caption(f"Showing {len(filtered_cars):,} matching cars")
+st.dataframe(
+	filtered_cars.sort_values("Price_Lakh", ascending=False),
+	use_container_width=True,
+	hide_index=True,
+	column_config={"Price_Lakh": st.column_config.NumberColumn("Price (₹ lakh)", format="₹%.2f")},
+)
+
+st.subheader("Estimate a price")
+st.caption("The estimate uses the same six inputs used to train the saved regression model.")
+input_columns = st.columns(3)
+with input_columns[0]:
+	prediction_brand = st.selectbox("Prediction brand", sorted(cars["Brand"].unique()))
+	prediction_fuel = st.selectbox("Prediction fuel type", sorted(cars["Fuel_Type"].unique()))
+with input_columns[1]:
+	prediction_transmission = st.selectbox(
+		"Prediction transmission", sorted(cars["Transmission"].unique())
+	)
+	prediction_engine = st.number_input(
+		"Engine size (CC)", min_value=0, max_value=8000, value=1500, step=50
+	)
+with input_columns[2]:
+	prediction_owner = st.selectbox("Owner type", sorted(cars["Owner_Type"].unique()))
+	prediction_safety = st.slider("Safety rating", 0.0, 5.0, 4.0, 0.1)
+
+def encode(column, value):
+	return sorted(cars[column].unique()).index(value)
+
+
+if st.button("Estimate price", type="primary", use_container_width=True):
+	features = [[
+		encode("Brand", prediction_brand),
+		encode("Fuel_Type", prediction_fuel),
+		encode("Transmission", prediction_transmission),
+		prediction_engine,
+		encode("Owner_Type", prediction_owner),
+		prediction_safety,
+	]]
+	estimate = float(model.predict(features)[0])
+	st.success(f"Estimated value: ₹{max(estimate, 0):.2f} lakh")
